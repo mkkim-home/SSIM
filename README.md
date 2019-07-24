@@ -1,1 +1,1 @@
-# iot-snn
+# SSIM
