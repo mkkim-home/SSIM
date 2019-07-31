@@ -20,6 +20,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.utils.data as Data
+from torch.nn.utils.rnn import pack_padded_sequence
 from torch.utils.tensorboard import SummaryWriter
 import matplotlib.pyplot as plt
 
@@ -31,8 +32,9 @@ modelname = 'model'
 resultname = 'result'
 summaryname = 'tensorboard'
 
-tr_dataname = ['ssim_tr_in_intel44.pt',
-               'ssim_tr_out_intel44.pt']
+tr_dataname = ['ssim_tr_in_pack_intel44.pt',
+               'ssim_tr_out_pack_intel44.pt',
+               'ssim_tr_len_pack_intel44.pt']
 # te_data = []
 
 input_size = 1
@@ -82,8 +84,13 @@ dataUtil = dataUtil.Data(DATA_PATH)
 
 train_input = dataUtil.load_data(tr_dataname[0])
 train_target = dataUtil.load_data(tr_dataname[1])
+train_lengths = dataUtil.load_data(tr_dataname[2])
 print('\tLoad Data')
 print('\t\tNb. of train data: ', train_input.shape[0])
+
+#################################################### test 하는 부분 만들고, (on the fly test)
+#################################################### cross validation 만들고,
+#################################################### 자잘자잘한 부분 정리하기!!
 
 # deletion method for train_input/ train_target
 nan_r_idx = np.unique(np.concatenate((np.where(np.isnan(train_input) == True)[0],
@@ -97,14 +104,18 @@ for r_idx in nan_r_idx:
     # print(r_idx)
     train_input = np.delete(train_input, r_idx, axis=0)  # delete row
     train_target = np.delete(train_target, r_idx, axis=0)  # delete row
+    train_lengths = np.delete(train_lengths, r_idx)
 print('\n\tNaN data deleted')
 print('\t\tNb. of train data: ', train_input.shape[0])
 
 train_input = torch.from_numpy(train_input)
 train_target = torch.from_numpy(train_target)
+train_lengths = torch.from_numpy(train_lengths)
 
 train_input = train_input.float()
 train_target = train_target.float()
+
+# train_packed_input = nn.utils.rnn.pack_padded_sequence(train_input, train_lengths.tolist(), batch_first=True)
 
 train_data_loader = Data.TensorDataset(train_input, train_target)
 train_loader = Data.DataLoader(dataset=train_data_loader, batch_size=batch_size, shuffle=True)
@@ -149,18 +160,61 @@ for i in range(epoch_start, epoch_max):
 
     ''' train with mini-batch '''
     for j, (input_mini, target_mini) in enumerate(train_loader):
+        # print(j)
+        # continue
+
         # print('\tminibatch %d'%j)
 
-        out = net(input_mini.unsqueeze(2))  # 일단, 어거지로 (batch, seq_len, input_size)로 맞춤, 나중에 input_size가 달라지면 여기 다시 봐야함...
 
-        loss = criterion(out, target_mini)
-        # print('Epoch {} MiniBatch {} Loss : {}'.format(i, j, loss.item()))
+        # if j == 21:
+            # pdb.set_trace()
 
+        # get length information
+        input_mini_lengths = np.where(input_mini != 0)[1]  # column infos.
+        temp_idx = np.where(input_mini_lengths == 0)
+        temp_idx = temp_idx[0][1:] - 1
+        input_mini_lengths = np.concatenate((input_mini_lengths[temp_idx] + 1, [input_mini_lengths[-1] + 1]))
+
+        # sort
+        sorted_idx = np.argsort(input_mini_lengths)[::-1]  # descending order
+        input_mini = torch.from_numpy(input_mini.detach().numpy()[sorted_idx])
+        input_mini_lengths = input_mini_lengths[sorted_idx]
+        target_mini = torch.from_numpy(target_mini.detach().numpy()[sorted_idx])
+
+        # pdb.set_trace()
+
+        # get packed sequence
+        packed_input_mini = pack_padded_sequence(input_mini.unsqueeze(2), input_mini_lengths.tolist(), batch_first=True)
+
+        out = net(packed_input_mini)
+        # out = net(input_mini.unsqueeze(2))  # 일단, 어거지로 (batch, seq_len, input_size)로 맞춤, 나중에 input_size가 달라지면 여기 다시 봐야함...
+        # pdb.set_trace()
+
+        for output_idx, output_length in enumerate(input_mini_lengths):
+            out[output_idx][output_length:] = 0
+
+        # try:
+        loss = criterion(out, target_mini[:, :out.size(1)])
+        # except:
+            # pdb.set_trace()
+
+        summary.add_scalar('train_loss(mini_batch)', loss.item(), (284*i)+j)
+        print('Epoch {} minibatch {} Loss : {}'.format(i, j, loss.item()))
+
+        # pdb.set_trace()
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
-    if i%10 == 0:
-        print('Epoch {} Loss : {}'.format(i, loss.item()))
+
+        if j%100 == 0:
+            torch.save(net.state_dict(), os.path.join(MODEL_PATH, 'model_epoch%d_batch%d.pth'%(i, j)))
+            print('\t\tmodel at iteration %d saved'%i)
+
+    # if i%10 == 0:
+        # print('Epoch {} Loss : {}'.format(i, loss.item()))
+
+    # torch.save(seq.state_dict(), os.path.join(MODEL_PATH, 'model_epoch%d.pth'%i))
+    # print('\t\tmodel at iteration %d saved'%i)
 
 pdb.set_trace()
