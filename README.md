@@ -3,6 +3,8 @@
 IEEE Internet of Things Journal 2019
 [paper](https://doi.org/10.1109/JIOT.2019.2909038)
 
+(! not official code)
+
 ### MODEL
 <img src="zhang2-2909038-large.gif" width="1000">
 
